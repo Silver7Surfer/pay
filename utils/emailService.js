@@ -1,19 +1,23 @@
-// utils/emailService.js
+// emailService.js
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Create a transporter object
+// Create nodemailer transporter
 const transporter = nodemailer.createTransport({
-  service: process.env.EMAIL_SERVICE, // e.g., 'gmail'
+  service: process.env.EMAIL_SERVICE || 'gmail',
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASSWORD
   }
 });
 
-// Function to send payment confirmation email
+/**
+ * Sends payment confirmation email
+ * @param {Object} paymentData - Payment information
+ * @returns {Promise<boolean>} - Success status
+ */
 export const sendPaymentConfirmation = async (paymentData) => {
   const { serverProvider, username, amount, paymentId } = paymentData;
   
@@ -56,20 +60,6 @@ export const sendPaymentConfirmation = async (paymentData) => {
   }
 };
 
-// General email sending function
-export const sendEmail = async (to, subject, html) => {
-  try {
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to,
-      subject,
-      html
-    };
-
-    await transporter.sendMail(mailOptions);
-    return true;
-  } catch (error) {
-    console.error('Email sending error:', error);
-    return false;
-  }
+export default {
+  sendPaymentConfirmation
 };
