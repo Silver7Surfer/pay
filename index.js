@@ -20,15 +20,72 @@ const PORT = process.env.PORT || 5000;
 // Simple in-memory cache to prevent duplicate emails
 const emailedSessions = new Set();
 
+// IMPORTANT: This webhook endpoint MUST come BEFORE json parsers
+app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  
+  if (!sig) {
+    return res.status(400).json({ status: 'error', message: 'No signature provided' });
+  }
+
+  let event;
+
+  try {
+    // Verify webhook signature
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error(`Webhook signature verification failed:`, err.message);
+    return res.status(400).json({ status: 'error', message: `Webhook Error: ${err.message}` });
+  }
+
+  // Handle checkout.session.completed event
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    
+    // Only process payments with status 'paid'
+    if (session.payment_status === 'paid' && !emailedSessions.has(session.id)) {
+      try {
+        // Extract user data from session metadata
+        const { username, serverProvider } = session.metadata;
+        
+        // Send confirmation email
+        await sendPaymentConfirmation({
+          serverProvider,
+          username,
+          amount: session.amount_total / 100,
+          paymentId: session.payment_intent || session.id
+        });
+        
+        // Mark session as emailed
+        emailedSessions.add(session.id);
+        
+        console.log(`[Webhook] Payment confirmation email sent for session: ${session.id}`);
+      } catch (error) {
+        console.error(`[Webhook] Error sending confirmation email:`, error);
+      }
+    } else if (emailedSessions.has(session.id)) {
+      console.log(`[Webhook] Email already sent for session: ${session.id}`);
+    }
+  }
+
+  // Send response to acknowledge receipt of the event
+  res.status(200).json({ received: true });
+});
+
 // Security middleware
 // Set security headers
 app.use(helmet());
 app.use(cors({
-  origin: ['http://localhost:5173', 'https://bigwin.gold', 'https://www.bigwin.gold'], // Your frontend URL
+  origin: '*',
   credentials: true,
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
 // Rate limiting
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -46,9 +103,7 @@ const paymentLimiter = rateLimit({
   message: 'Too many payment attempts from this IP, please try again later'
 });
 
-
-
-// Body parsers
+// Body parsers - MUST come AFTER the webhook route
 app.use(express.json({ limit: '10kb' })); // Body limit is 10kb
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
@@ -169,36 +224,6 @@ app.get('/verify-payment/:sessionId', async (req, res) => {
       expand: ['payment_intent', 'line_items']
     });
     
-    // Send email if payment is successful and we haven't sent one already for this session
-    let emailSent = false;
-    if (session.payment_status === 'paid' && !emailedSessions.has(sessionId)) {
-      try {
-        // Extract metadata from the session
-        const { username, serverProvider } = session.metadata;
-        
-        // Send confirmation email
-        await sendPaymentConfirmation({
-          serverProvider,
-          username,
-          amount: session.amount_total / 100,
-          paymentId: session.payment_intent?.id || session.id
-        });
-        
-        // Mark this session as having received an email
-        emailedSessions.add(sessionId);
-        emailSent = true;
-        
-        console.log(`[ReqID: ${req.id}] Payment confirmation email sent for session: ${session.id}`);
-      } catch (emailError) {
-        console.error(`[ReqID: ${req.id}] Error sending confirmation email:`, emailError);
-        // Continue processing even if email fails
-      }
-    } else if (emailedSessions.has(sessionId)) {
-      // Email was already sent for this session
-      emailSent = true;
-      console.log(`[ReqID: ${req.id}] Email already sent for session: ${sessionId}, skipping`);
-    }
-    
     // Return session details including payment status
     res.status(200).json({
       status: 'success',
@@ -214,7 +239,8 @@ app.get('/verify-payment/:sessionId', async (req, res) => {
         paymentId: session.payment_intent?.id || null,
         receiptUrl: session.payment_intent?.charges?.data?.[0]?.receipt_url || null
       } : null,
-      emailSent: emailSent
+      // Let the frontend know if we've sent an email via webhook
+      emailSent: emailedSessions.has(sessionId)
     });
   } catch (error) {
     console.error(`[ReqID: ${req.id}] Error verifying payment:`, error);
