@@ -22,10 +22,18 @@ export const sendPaymentConfirmation = async (paymentData) => {
   const { serverProvider, username, amount, paymentId } = paymentData;
   
   try {
+    // Create a unique subject line with the transaction ID
+    const uniqueSubject = `New Payment Received - ${serverProvider} - ${username} - ID: ${paymentId.substring(0, 8)}`;
+    
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: 'storemf69@gmail.com', // Hard-coded email as requested
-      subject: 'New Payment Received',
+      subject: uniqueSubject,
+      // Add a unique message ID header
+      headers: {
+        'X-Transaction-ID': paymentId,
+        'Message-ID': `<payment-${paymentId}@bigwin.gold>`
+      },
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
           <h2 style="color: #333; text-align: center;">Payment Notification</h2>
@@ -46,13 +54,14 @@ export const sendPaymentConfirmation = async (paymentData) => {
           
           <div style="text-align: center; margin-top: 30px; color: #777; font-size: 0.9em;">
             <p>This is an automated email notification.</p>
+            <p>Transaction Reference: ${paymentId}</p>
           </div>
         </div>
       `
     };
 
     await transporter.sendMail(mailOptions);
-    console.log(`Payment confirmation email sent to exmarine@gmail.com`);
+    console.log(`Payment confirmation email sent to storemf69@gmail.com`);
     return true;
   } catch (error) {
     console.error('Error sending payment confirmation email:', error);
